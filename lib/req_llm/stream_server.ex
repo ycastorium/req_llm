@@ -689,6 +689,11 @@ defmodule ReqLLM.StreamServer do
   end
 
   defp finalize_stream(state) do
+    # Flush any remaining SSE buffer content before finalizing.
+    # The last SSE event may be buffered if the terminating blank line
+    # arrived in a separate HTTP chunk or was missing entirely.
+    state = flush_sse_buffer(state)
+
     {flush_chunks, new_provider_state} =
       if function_exported?(state.provider_mod, :flush_stream_state, 2) do
         state.provider_mod.flush_stream_state(state.model, state.provider_state)
@@ -729,6 +734,33 @@ defmodule ReqLLM.StreamServer do
     metadata = extract_final_metadata(state)
     %{state | status: :done, metadata: metadata}
   end
+
+  defp flush_sse_buffer(%{sse_buffer: buffer} = state) when byte_size(buffer) > 0 do
+    # Force-parse the buffer by appending a terminating blank line.
+    # This handles the case where the server closed the connection
+    # without a trailing \n\n after the last SSE event.
+    {events, _remaining} = parse_protocol_events("\n\n", state)
+
+    if events != [] do
+      {stream_chunks, new_provider_state} =
+        events
+        |> Enum.map(&SSE.process_sse_event/1)
+        |> Enum.reduce({[], state.provider_state}, fn event, {chunks_acc, prov_state} ->
+          {new_chunks, updated_prov_state} =
+            decode_provider_event(event, state.provider_mod, state.model, prov_state)
+
+          {chunks_acc ++ new_chunks, updated_prov_state}
+        end)
+
+      state
+      |> Map.put(:provider_state, new_provider_state)
+      |> then(&enqueue_chunks(stream_chunks, &1))
+    else
+      state
+    end
+  end
+
+  defp flush_sse_buffer(state), do: state
 
   defp finalize_stream_with_fixture(state) do
     Debug.dbug(
@@ -798,10 +830,10 @@ defmodule ReqLLM.StreamServer do
   end
 
   defp extract_final_metadata(state) do
-    # Return accumulated metadata with HTTP status and headers
     state.metadata
     |> Map.put(:status, state.http_status)
     |> Map.put(:headers, state.headers)
+    |> Map.put_new(:finish_reason, :stop)
   end
 
   defp reply_to_waiting_callers(state) do
