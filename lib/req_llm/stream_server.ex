@@ -92,7 +92,8 @@ defmodule ReqLLM.StreamServer do
     object_acc: [],
     fixture_saved?: false,
     raw_iodata: [],
-    raw_bytes: 0
+    raw_bytes: 0,
+    terminated?: false
   ]
 
   @doc """
@@ -601,9 +602,11 @@ defmodule ReqLLM.StreamServer do
       })
 
     # Check if any events signaled completion
+    terminated? = Enum.any?(events, &termination_event?/1)
+
     new_state =
-      if Enum.any?(events, &termination_event?/1) do
-        finalize_stream_with_fixture(new_state)
+      if terminated? do
+        finalize_stream_with_fixture(%{new_state | terminated?: true})
       else
         new_state
       end
@@ -830,10 +833,16 @@ defmodule ReqLLM.StreamServer do
   end
 
   defp extract_final_metadata(state) do
-    state.metadata
-    |> Map.put(:status, state.http_status)
-    |> Map.put(:headers, state.headers)
-    |> Map.put_new(:finish_reason, :stop)
+    meta =
+      state.metadata
+      |> Map.put(:status, state.http_status)
+      |> Map.put(:headers, state.headers)
+
+    if state.terminated? do
+      Map.put_new(meta, :finish_reason, :stop)
+    else
+      Map.put_new(meta, :finish_reason, :incomplete)
+    end
   end
 
   defp reply_to_waiting_callers(state) do

@@ -166,8 +166,22 @@ defmodule ReqLLM.StreamServer.StreamingTest do
     end
   end
 
-  describe "default finish_reason metadata" do
-    test "sets finish_reason to :stop when provider omits it" do
+  describe "finish_reason metadata" do
+    test "defaults to :stop when provider sends termination event without finish_reason" do
+      server = start_server()
+
+      sse_data = ~s(data: {"choices": [{"delta": {"content": "hi"}}]}\n\n)
+      done_event = "data: [DONE]\n\n"
+
+      StreamServer.http_event(server, {:data, sse_data})
+      StreamServer.http_event(server, {:data, done_event})
+      StreamServer.http_event(server, :done)
+
+      assert {:ok, metadata} = StreamServer.await_metadata(server, 500)
+      assert metadata.finish_reason == :stop
+    end
+
+    test "sets finish_reason to :incomplete when stream ends without termination event" do
       server = start_server()
 
       sse_data = ~s(data: {"choices": [{"delta": {"content": "hi"}}]}\n\n)
@@ -175,7 +189,7 @@ defmodule ReqLLM.StreamServer.StreamingTest do
       StreamServer.http_event(server, :done)
 
       assert {:ok, metadata} = StreamServer.await_metadata(server, 500)
-      assert metadata.finish_reason == :stop
+      assert metadata.finish_reason == :incomplete
     end
 
     test "preserves provider-supplied finish_reason" do
