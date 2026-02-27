@@ -743,6 +743,7 @@ defmodule ReqLLM.StreamServer do
     # This handles the case where the server closed the connection
     # without a trailing \n\n after the last SSE event.
     {events, _remaining} = parse_protocol_events("\n\n", state)
+    terminated? = Enum.any?(events, &termination_event?/1)
 
     if events != [] do
       {stream_chunks, new_provider_state} =
@@ -757,6 +758,7 @@ defmodule ReqLLM.StreamServer do
 
       state
       |> Map.put(:provider_state, new_provider_state)
+      |> Map.put(:terminated?, state.terminated? or terminated?)
       |> then(&enqueue_chunks(stream_chunks, &1))
     else
       state

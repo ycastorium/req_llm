@@ -181,6 +181,16 @@ defmodule ReqLLM.StreamServer.StreamingTest do
       assert metadata.finish_reason == :stop
     end
 
+    test "defaults to :stop when buffered done event is missing trailing blank line" do
+      server = start_server()
+
+      StreamServer.http_event(server, {:data, "data: [DONE]\n"})
+      StreamServer.http_event(server, :done)
+
+      assert {:ok, metadata} = StreamServer.await_metadata(server, 500)
+      assert metadata.finish_reason == :stop
+    end
+
     test "sets finish_reason to :incomplete when stream ends without termination event" do
       server = start_server()
 
